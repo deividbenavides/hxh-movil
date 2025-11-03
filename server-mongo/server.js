@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 5002;
 const MONGO_URI =
   process.env.MONGO_URI ||
   "mongodb+srv://hxh_user:HxHpass_2025@cluster0.s1cs0k0.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
-const MONGO_DB = process.env.MONGO_DB || "hxh_db";
+const MONGO_DB = process.env.MONGO_DB || "hxhdb";
 const MONGO_COLLECTION = process.env.MONGO_COLLECTION || "characters_mongo";
 
 // 2. CLIENTE MONGO con opciones para Atlas
