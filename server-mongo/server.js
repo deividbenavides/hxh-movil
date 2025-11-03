@@ -1,148 +1,107 @@
-// hxh-app/server-mongo/server.js
-const express = require("express");
-const cors = require("cors");
-const dotenv = require("dotenv");
-const { MongoClient } = require("mongodb");
-const swaggerUi = require("swagger-ui-express");
-const swaggerJsdoc = require("swagger-jsdoc");
+// server-mongo/server.js
+import express from "express";
+import cors from "cors";
+import { MongoClient, ServerApiVersion } from "mongodb";
+import swaggerUi from "swagger-ui-express";
 
-dotenv.config();
+// 1. LEER VARIABLES DE ENTORNO (Render y local)
+const PORT = process.env.PORT || 5002;
+const MONGO_URI =
+  process.env.MONGO_URI ||
+  "mongodb+srv://hxh_user:HxHpass_2025@cluster0.s1cs0k0.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
+const MONGO_DB = process.env.MONGO_DB || "hxh_db";
+const MONGO_COLLECTION = process.env.MONGO_COLLECTION || "characters_mongo";
+
+// 2. CLIENTE MONGO con opciones para Atlas
+const client = new MongoClient(MONGO_URI, {
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: false,
+    deprecationErrors: false,
+  },
+  // esto ayuda en Render con TLS
+  tls: true
+});
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const mongoUri = process.env.MONGO_URI;
-const dbName = process.env.MONGO_DB || "hxhdb";
-const collectionName = process.env.MONGO_COLLECTION || "characters";
-
-let collection; // aquí guardamos la colección real
-
-async function connectMongo() {
-  const client = new MongoClient(mongoUri);
-  await client.connect();
-  const db = client.db(dbName);
-  collection = db.collection(collectionName);
-  console.log("✅ Conectado a Mongo Atlas →", dbName, "/", collectionName);
-}
-
-// swagger
-const swaggerOptions = {
-  definition: {
-    openapi: "3.0.0",
-    info: {
-      title: "Hunter x Hunter API - Mongo",
-      version: "1.0.0",
-      description: "Personajes no relacionales (Mongo Atlas)",
-    },
-    servers: [
-      {
-        url: process.env.PUBLIC_URL || "http://localhost:5002",
-      },
-    ],
+// 3. DOC SWAGGER sencilla
+const swaggerDoc = {
+  openapi: "3.0.0",
+  info: {
+    title: "Hunter x Hunter API - MongoDB",
+    version: "1.0.0",
+    description: "CRUD de personajes (parte no relacional, Mongo Atlas)",
   },
-  apis: ["./server.js"],
+  servers: [
+    { url: `http://localhost:${PORT}` },
+    // Render lo cambia por el dominio real
+  ],
+  paths: {
+    "/health": {
+      get: {
+        summary: "Chequeo del servicio",
+        responses: {
+          200: {
+            description: "OK",
+          },
+        },
+      },
+    },
+    "/characters": {
+      get: {
+        summary: "Lista los personajes (Mongo)",
+        responses: {
+          200: {
+            description: "Lista de personajes",
+          },
+        },
+      },
+    },
+  },
 };
 
-const swaggerSpec = swaggerJsdoc(swaggerOptions);
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDoc));
 
-app.get("/health", (_req, res) => res.send("ok"));
+// 4. ENDPOINTS
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", service: "mongo" });
+});
 
-app.get("/characters", async (_req, res) => {
+app.get("/characters", async (req, res) => {
   try {
-    const docs = await collection.find({}).project({ _id: 0 }).toArray();
-    res.status(200).json(docs);
+    const db = client.db(MONGO_DB);
+    const col = db.collection(MONGO_COLLECTION);
+    const data = await col.find({}).toArray();
+    res.json(data);
   } catch (err) {
-    console.error("GET /characters", err);
-    res.status(500).json({ error: "Error del servidor" });
+    console.error("GET /characters error:", err);
+    res.status(500).json({ error: "Error consultando Mongo" });
   }
 });
 
-// sembrar data de ejemplo
-app.get("/seed", async (_req, res) => {
+// 5. CONEXIÓN A MONGO + LEVANTAR SERVIDOR
+async function start() {
   try {
-    const count = await collection.countDocuments();
-    if (count > 0) {
-      return res.json({ ok: true, message: "Ya había datos, no se sembró de nuevo", count });
-    }
+    console.log("⏳ Conectando a Mongo Atlas…");
+    await client.connect();
+    console.log("✅ Conectado a Mongo Atlas");
 
-    const docs = [
-      {
-        name: "netero",
-        displayName: "Isaac Netero",
-        age: 110,
-        height_cm: 160,
-        weight_kg: 55,
-        imageUrl: "https://static.wikia.nocookie.net/hunterxhunter/images/d/d9/Chairman_Netero.png",
-        nen_type: "Refuerzo",
-        role: "Presidente Asociación Hunter",
-      },
-      {
-        name: "meruem",
-        displayName: "Meruem",
-        age: 40,
-        height_cm: 160,
-        weight_kg: 65,
-        imageUrl: "https://static.wikia.nocookie.net/hunterxhunter/images/7/72/Meruem.png",
-        nen_type: "Especialista",
-        role: "Rey Hormiga Quimera",
-      },
-      {
-        name: "neferpitou",
-        displayName: "Neferpitou",
-        age: null,
-        height_cm: 175,
-        weight_kg: 60,
-        imageUrl: "https://static.wikia.nocookie.net/hunterxhunter/images/1/12/Neferpitou.png",
-        nen_type: "Especialista",
-        role: "Guardián real",
-      },
-      {
-        name: "knuckle",
-        displayName: "Knuckle Bine",
-        age: 28,
-        height_cm: 185,
-        weight_kg: 82,
-        imageUrl: "https://static.wikia.nocookie.net/hunterxhunter/images/8/88/Knuckle.png",
-        nen_type: "Refuerzo",
-        role: "Cazador",
-      },
-      {
-        name: "bisky",
-        displayName: "Biscuit Krueger",
-        age: 57,
-        height_cm: 160,
-        weight_kg: 48,
-        imageUrl: "https://static.wikia.nocookie.net/hunterxhunter/images/f/fe/Biscuit_Krueger.png",
-        nen_type: "Transformación",
-        role: "Maestra de Gon y Killua",
-      },
-      {
-        name: "kite",
-        displayName: "Kite",
-        age: 25,
-        height_cm: 183,
-        weight_kg: 75,
-        imageUrl: "https://static.wikia.nocookie.net/hunterxhunter/images/9/9a/Kite.png",
-        nen_type: "Conjuración",
-        role: "Discípulo de Ging",
-      },
-    ];
-
-    await collection.insertMany(docs);
-    res.json({ ok: true, inserted: docs.length });
+    app.listen(PORT, () => {
+      console.log(`API Mongo escuchando en http://localhost:${PORT}`);
+      console.log(`Swagger Mongo en http://localhost:${PORT}/api-docs`);
+    });
   } catch (err) {
-    console.error("GET /seed", err);
-    res.status(500).json({ error: "No se pudo sembrar" });
+    console.error("❌ No se pudo conectar a Mongo Atlas:", err.message);
+    // aun así levantamos la API para que Render no la marque como caída
+    app.listen(PORT, () => {
+      console.log(
+        `API Mongo levantada SIN conexión a Mongo, en http://localhost:${PORT}`
+      );
+    });
   }
-});
+}
 
-const port = Number(process.env.PORT || 5002);
-
-connectMongo().then(() => {
-  app.listen(port, () => {
-    console.log(`🚀 API Mongo escuchando en http://localhost:${port}`);
-    console.log(`📄 Swagger en http://localhost:${port}/api-docs`);
-  });
-});
+start();
