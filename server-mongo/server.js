@@ -10,7 +10,7 @@ const MONGO_URI =
   process.env.MONGO_URI ||
   "mongodb+srv://hxh_user:HxHpass_2025@cluster0.s1cs0k0.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
 const MONGO_DB = process.env.MONGO_DB || "hxhdb";
-const MONGO_COLLECTION = process.env.MONGO_COLLECTION || "characters_mongo";
+const MONGO_COLLECTION = process.env.MONGO_COLLECTION || "characters";
 
 // 2. CLIENTE MONGO con opciones para Atlas
 const client = new MongoClient(MONGO_URI, {
