@@ -19,15 +19,14 @@ const client = new MongoClient(MONGO_URI, {
     strict: false,
     deprecationErrors: false,
   },
-  // esto ayuda en Render con TLS
-  tls: true
+  tls: true, // ayuda en Render
 });
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 3. DOC SWAGGER sencilla
+// 3. DOC SWAGGER (aquí ya meto GET y POST)
 const swaggerDoc = {
   openapi: "3.0.0",
   info: {
@@ -36,8 +35,9 @@ const swaggerDoc = {
     description: "CRUD de personajes (parte no relacional, Mongo Atlas)",
   },
   servers: [
+    // esto es para que en local se vea bien
     { url: `http://localhost:${PORT}` },
-    // Render lo cambia por el dominio real
+    // en Render él mismo pone el dominio real
   ],
   paths: {
     "/health": {
@@ -59,13 +59,45 @@ const swaggerDoc = {
           },
         },
       },
+      post: {
+        summary: "Crea un personaje en Mongo",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  name: { type: "string", example: "gon" },
+                  displayName: { type: "string", example: "Gon Freecss" },
+                  age: { type: "integer", example: 12 },
+                  height_cm: { type: "integer", example: 154 },
+                  weight_kg: { type: "integer", example: 49 },
+                  nen_type: { type: "string", example: "Refuerzo" },
+                  role: { type: "string", example: "Hunter" },
+                  imageUrl: {
+                    type: "string",
+                    example: "https://mis-imagenes.com/gon.png",
+                  },
+                },
+                required: ["name"],
+              },
+            },
+          },
+        },
+        responses: {
+          201: { description: "Personaje creado" },
+          400: { description: "Faltan datos" },
+        },
+      },
     },
   },
 };
 
+// montar swagger en /api-docs
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDoc));
 
-// 4. ENDPOINTS
+// 4. ENDPOINTS REALES
 app.get("/health", (req, res) => {
   res.json({ status: "ok", service: "mongo" });
 });
@@ -79,6 +111,27 @@ app.get("/characters", async (req, res) => {
   } catch (err) {
     console.error("GET /characters error:", err);
     res.status(500).json({ error: "Error consultando Mongo" });
+  }
+});
+
+// 👉 nuevo: POST para insertar desde Swagger
+app.post("/characters", async (req, res) => {
+  try {
+    const db = client.db(MONGO_DB);
+    const col = db.collection(MONGO_COLLECTION);
+
+    const nuevo = req.body;
+
+    // validación mínima
+    if (!nuevo.name) {
+      return res.status(400).json({ error: "El campo 'name' es obligatorio" });
+    }
+
+    const result = await col.insertOne(nuevo);
+    return res.status(201).json({ _id: result.insertedId, ...nuevo });
+  } catch (err) {
+    console.error("POST /characters error:", err);
+    res.status(500).json({ error: "Error insertando en Mongo" });
   }
 });
 
