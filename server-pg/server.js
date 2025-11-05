@@ -1,163 +1,154 @@
-// hxh-app/server-pg/server.js
-const express = require("express");
-const cors = require("cors");
-const dotenv = require("dotenv");
-const { Pool } = require("pg");
-const swaggerUi = require("swagger-ui-express");
-const swaggerJsdoc = require("swagger-jsdoc");
+// server-pg/server.js
+import express from "express";
+import cors from "cors";
+import pkg from "pg";
+import swaggerUi from "swagger-ui-express";
+const { Pool } = pkg;
 
-dotenv.config();
+// ===== 1) ENV =====
+const PORT = process.env.PORT || 5001;
+const DATABASE_URL =
+  process.env.DATABASE_URL ||
+  "postgresql://postgres:postgres@localhost:5432/hxh"; // ajusta si hace falta
+
+const pool = new Pool({ connectionString: DATABASE_URL, ssl: process.env.PGSSL === "true" ? { rejectUnauthorized: false } : false });
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// conexión a Postgres (Render)
-const pool = new Pool({
-  host: process.env.PG_HOST,
-  port: Number(process.env.PG_PORT || 5432),
-  user: process.env.PG_USER,
-  password: process.env.PG_PASSWORD,
-  database: process.env.PG_DATABASE,
-  ssl: {
-    rejectUnauthorized: false,
-  },
-});
-
-
-// Swagger
-const swaggerOptions = {
-  definition: {
-    openapi: "3.0.0",
-    info: {
-      title: "Hunter x Hunter API - PostgreSQL",
-      version: "1.0.0",
-      description: "CRUD de personajes (parte relacional, Postgres en Render)",
-    },
-    servers: [
-      {
-        url: process.env.PUBLIC_URL || "http://localhost:5001",
+// ===== 2) SWAGGER =====
+const swaggerDoc = {
+  openapi: "3.0.0",
+  info: { title: "HXH API - PostgreSQL", version: "1.0.0" },
+  servers: [{ url: `http://localhost:${PORT}` }],
+  paths: {
+    "/health": { get: { summary: "Health", responses: { 200: { description: "OK" } } } },
+    "/characters": {
+      get: { summary: "Lista personajes", responses: { 200: { description: "OK" } } },
+      post: {
+        summary: "Crea un personaje",
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["name","displayName"], properties: {
+          name:{type:"string"}, displayName:{type:"string"}, imageUrl:{type:"string"}, age:{type:"number"},
+          height_cm:{type:"number"}, weight_kg:{type:"number"}, nen_type:{type:"string"}, role:{type:"string"}
+        }}}}},
+        responses: { 201: { description: "Creado" }, 400: { description: "Faltan datos" } },
       },
-    ],
+    },
+    "/characters/{id}": {
+      put: {
+        summary: "Actualiza por ID",
+        parameters: [{ name:"id", in:"path", required:true, schema:{type:"integer"} }],
+        requestBody: { required:true, content: { "application/json": { schema:{ type:"object", additionalProperties:true }}}},
+        responses: { 200: { description: "Actualizado" }, 404: { description: "No encontrado" } },
+      },
+      delete: {
+        summary: "Elimina por ID",
+        parameters: [{ name:"id", in:"path", required:true, schema:{type:"integer"} }],
+        responses: { 204: { description: "Eliminado" }, 404: { description: "No encontrado" } },
+      },
+    },
   },
-  apis: ["./server.js"],
+};
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDoc));
+
+// ===== 3) HELPERS =====
+const allowedCols = [
+  "name","displayName","imageUrl","age","height_cm","weight_kg","nen_type","role",
+];
+
+// Mapear JS → columnas reales
+const colMap = {
+  name: "name",
+  displayName: "displayname",
+  imageUrl: "imageurl",
+  age: "age",
+  height_cm: "height_cm",
+  weight_kg: "weight_kg",
+  nen_type: "nen_type",
+  role: "role",
 };
 
-const swaggerSpec = swaggerJsdoc(swaggerOptions);
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+function buildUpdate(payload) {
+  const entries = Object.entries(payload).filter(([k, v]) => allowedCols.includes(k) && v !== undefined);
+  if (!entries.length) return null;
+  const sets = entries.map(([k], i) => `${colMap[k]} = $${i + 1}`);
+  const values = entries.map(([, v]) => v);
+  return { sets: sets.join(", "), values };
+}
 
-/**
- * @swagger
- * /health:
- *   get:
- *     summary: Chequeo del servicio
- *     responses:
- *       200:
- *         description: ok
- */
-app.get("/health", (_req, res) => {
-  res.send("ok");
-});
+// ===== 4) ENDPOINTS =====
+app.get("/health", (_req, res) => res.json({ status: "ok", service: "pg" }));
 
-/**
- * @swagger
- * /characters:
- *   get:
- *     summary: Lista todos los personajes (PostgreSQL)
- */
+// LIST
 app.get("/characters", async (_req, res) => {
   try {
-    const { rows } = await pool.query("SELECT * FROM hxh_characters ORDER BY id");
+    const { rows } = await pool.query(`SELECT id, name, displayname, imageurl, age, height_cm, weight_kg, nen_type, role FROM characters ORDER BY id`);
     res.json(rows);
-  } catch (err) {
-    console.error("GET /characters", err);
-    res.status(500).send("Error del servidor");
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Error listando" });
   }
 });
 
-/**
- * @swagger
- * /characters/{id}:
- *   get:
- *     summary: Obtiene un personaje por ID
- */
-app.get("/characters/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { rows } = await pool.query("SELECT * FROM hxh_characters WHERE id=$1", [id]);
-    if (!rows.length) return res.status(404).send("No encontrado");
-    res.json(rows[0]);
-  } catch (err) {
-    console.error("GET /characters/:id", err);
-    res.status(500).send("Error del servidor");
-  }
-});
-
-/**
- * @swagger
- * /characters:
- *   post:
- *     summary: Crea un personaje
- */
+// CREATE
 app.post("/characters", async (req, res) => {
-  try {
-    const { name, age, height_cm, weight_kg, image_url, description } = req.body;
-    if (!name || !image_url) return res.status(400).send("name e image_url son obligatorios");
+  const { name, displayName, imageUrl, age, height_cm, weight_kg, nen_type, role } = req.body || {};
+  if (!name || !displayName) return res.status(400).json({ error: "name y displayName requeridos" });
 
+  try {
     const { rows } = await pool.query(
-      "INSERT INTO hxh_characters (name, age, height_cm, weight_kg, image_url, description) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *",
-      [name, age, height_cm, weight_kg, image_url, description]
+      `INSERT INTO characters (name, displayname, imageurl, age, height_cm, weight_kg, nen_type, role)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       RETURNING id, name, displayname, imageurl, age, height_cm, weight_kg, nen_type, role`,
+      [name, displayName, imageUrl ?? null, age ?? null, height_cm ?? null, weight_kg ?? null, nen_type ?? null, role ?? null]
     );
     res.status(201).json(rows[0]);
-  } catch (err) {
-    console.error("POST /characters", err);
-    res.status(500).send("Error del servidor");
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Error creando" });
   }
 });
 
-/**
- * @swagger
- * /characters/{id}:
- *   put:
- *     summary: Actualiza un personaje
- */
+// UPDATE
 app.put("/characters/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { name, age, height_cm, weight_kg, image_url, description } = req.body;
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "ID inválido" });
 
+  const upd = buildUpdate(req.body || {});
+  if (!upd) return res.status(400).json({ error: "Nada para actualizar" });
+
+  try {
     const { rows } = await pool.query(
-      "UPDATE hxh_characters SET name=$1, age=$2, height_cm=$3, weight_kg=$4, image_url=$5, description=$6 WHERE id=$7 RETURNING *",
-      [name, age, height_cm, weight_kg, image_url, description, id]
+      `UPDATE characters SET ${upd.sets} WHERE id = $${upd.values.length + 1}
+       RETURNING id, name, displayname, imageurl, age, height_cm, weight_kg, nen_type, role`,
+      [...upd.values, id]
     );
-    if (!rows.length) return res.status(404).send("No encontrado");
+    if (!rows.length) return res.status(404).json({ error: "No encontrado" });
     res.json(rows[0]);
-  } catch (err) {
-    console.error("PUT /characters/:id", err);
-    res.status(500).send("Error del servidor");
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Error actualizando" });
   }
 });
 
-/**
- * @swagger
- * /characters/{id}:
- *   delete:
- *     summary: Elimina un personaje
- */
+// DELETE
 app.delete("/characters/:id", async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "ID inválido" });
+
   try {
-    const { id } = req.params;
-    const { rowCount } = await pool.query("DELETE FROM hxh_characters WHERE id=$1", [id]);
-    if (!rowCount) return res.status(404).send("No encontrado");
-    res.json({ ok: true });
-  } catch (err) {
-    console.error("DELETE /characters/:id", err);
-    res.status(500).send("Error del servidor");
+    const { rowCount } = await pool.query(`DELETE FROM characters WHERE id = $1`, [id]);
+    if (!rowCount) return res.status(404).json({ error: "No encontrado" });
+    res.status(204).send();
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Error eliminando" });
   }
 });
 
-const port = Number(process.env.PORT || 5001);
-app.listen(port, () => {
-  console.log(`API PG escuchando en http://localhost:${port}`);
-  console.log(`Swagger PG en http://localhost:${port}/api-docs`);
+// ===== 5) START =====
+app.listen(PORT, () => {
+  console.log(`API PG en http://localhost:${PORT}`);
+  console.log("Swagger: /api-docs");
 });

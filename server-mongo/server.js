@@ -1,10 +1,10 @@
 // server-mongo/server.js
 import express from "express";
 import cors from "cors";
-import { MongoClient, ServerApiVersion } from "mongodb";
+import { MongoClient, ServerApiVersion, ObjectId } from "mongodb";
 import swaggerUi from "swagger-ui-express";
 
-// 1. LEER VARIABLES DE ENTORNO (Render y local)
+// ===== ENV =====
 const PORT = process.env.PORT || 5002;
 const MONGO_URI =
   process.env.MONGO_URI ||
@@ -12,158 +12,139 @@ const MONGO_URI =
 const MONGO_DB = process.env.MONGO_DB || "hxhdb";
 const MONGO_COLLECTION = process.env.MONGO_COLLECTION || "characters";
 
-// 2. CLIENTE MONGO con opciones para Atlas
+// ===== CLIENT =====
 const client = new MongoClient(MONGO_URI, {
-  serverApi: {
-    version: ServerApiVersion.v1,
-    strict: false,
-    deprecationErrors: false,
-  },
-  tls: true, // ayuda con TLS en Render
+  serverApi: { version: ServerApiVersion.v1, strict: false, deprecationErrors: false },
+  tls: true,
 });
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 3. DOC SWAGGER
+// ===== SWAGGER =====
 const swaggerDoc = {
   openapi: "3.0.0",
-  info: {
-    title: "Hunter x Hunter API - MongoDB",
-    version: "1.0.0",
-    description: "CRUD de personajes (parte no relacional, Mongo Atlas)",
-  },
-  // IMPORTANTE: primero la URL de Render
-  servers: [
-    { url: "https://hxh-mongo.onrender.com" },
-    { url: "http://localhost:5002" },
-  ],
+  info: { title: "HXH API - MongoDB", version: "1.0.0" },
+  servers: [{ url: `http://localhost:${PORT}` }],
   paths: {
-    "/health": {
-      get: {
-        summary: "Chequeo del servicio",
-        responses: {
-          200: { description: "OK" },
-        },
-      },
-    },
+    "/health": { get: { summary: "Health", responses: { 200: { description: "OK" } } } },
     "/characters": {
-      get: {
-        summary: "Lista los personajes (Mongo)",
-        responses: {
-          200: { description: "Lista de personajes" },
-        },
-      },
+      get: { summary: "Lista personajes", responses: { 200: { description: "OK" } } },
       post: {
-        summary: "Crea un personaje en Mongo",
+        summary: "Crea un personaje",
         requestBody: {
           required: true,
           content: {
             "application/json": {
               schema: {
                 type: "object",
-                properties: {
-                  name: { type: "string", example: "gon" },
-                  displayName: { type: "string", example: "Gon Freecss" },
-                  age: { type: "number", example: 12 },
-                  height_cm: { type: "number", example: 154 },
-                  weight_kg: { type: "number", example: 49 },
-                  nen_type: { type: "string", example: "Refuerzo" },
-                  role: { type: "string", example: "Hunter" },
-                  imageUrl: {
-                    type: "string",
-                    example: "https://mis-imagenes.com/gon.png",
-                  },
-                },
                 required: ["name", "displayName"],
+                properties: {
+                  name: { type: "string" },
+                  displayName: { type: "string" },
+                  imageUrl: { type: "string" },
+                  age: { type: "number" },
+                  height_cm: { type: "number" },
+                  weight_kg: { type: "number" },
+                  nen_type: { type: "string" },
+                  role: { type: "string" },
+                },
               },
             },
           },
         },
-        responses: {
-          201: { description: "Personaje creado" },
-          400: { description: "Faltan datos" },
-          500: { description: "Error al crear en Mongo" },
-        },
+        responses: { 201: { description: "Creado" }, 400: { description: "Faltan datos" } },
+      },
+    },
+    "/characters/{id}": {
+      put: {
+        summary: "Actualiza por ID",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: true } } } },
+        responses: { 200: { description: "Actualizado" }, 404: { description: "No encontrado" } },
+      },
+      delete: {
+        summary: "Elimina por ID",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: { 204: { description: "Eliminado" }, 404: { description: "No encontrado" } },
       },
     },
   },
 };
-
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDoc));
 
-// 4. ENDPOINTS
-app.get("/health", (req, res) => {
-  res.json({ status: "ok", service: "mongo" });
-});
+// ===== HELPERS =====
+const col = () => client.db(MONGO_DB).collection(MONGO_COLLECTION);
+const toId = (id) => { try { return new ObjectId(id); } catch { return null; } };
 
-app.get("/characters", async (req, res) => {
+// ===== ENDPOINTS =====
+app.get("/health", (_req, res) => res.json({ status: "ok", service: "mongo" }));
+
+// LIST
+app.get("/characters", async (_req, res) => {
   try {
-    const db = client.db(MONGO_DB);
-    const col = db.collection(MONGO_COLLECTION);
-    const data = await col.find({}).toArray();
+    const data = await col().find({}).toArray();
     res.json(data);
-  } catch (err) {
-    console.error("GET /characters error:", err);
-    res.status(500).json({ error: "Error consultando Mongo" });
+  } catch (e) {
+    console.error(e); res.status(500).json({ error: "Error listando" });
   }
 });
 
+// CREATE
 app.post("/characters", async (req, res) => {
+  const { name, displayName, ...rest } = req.body || {};
+  if (!name || !displayName) return res.status(400).json({ error: "name y displayName requeridos" });
+
   try {
-    const body = req.body || {};
-    if (!body.name || !body.displayName) {
-      return res.status(400).json({
-        error: "name y displayName son obligatorios",
-      });
-    }
-
-    const db = client.db(MONGO_DB);
-    const col = db.collection(MONGO_COLLECTION);
-
-    const result = await col.insertOne({
-      name: body.name,
-      displayName: body.displayName,
-      age: body.age || null,
-      height_cm: body.height_cm || null,
-      weight_kg: body.weight_kg || null,
-      nen_type: body.nen_type || null,
-      role: body.role || null,
-      imageUrl: body.imageUrl || null,
-      createdAt: new Date(),
-    });
-
-    res.status(201).json({
-      message: "Personaje creado",
-      id: result.insertedId,
-    });
-  } catch (err) {
-    console.error("POST /characters error:", err);
-    res.status(500).json({ error: "Error creando personaje" });
+    const r = await col().insertOne({ name, displayName, ...rest });
+    res.status(201).json({ _id: r.insertedId, name, displayName, ...rest });
+  } catch (e) {
+    console.error(e); res.status(500).json({ error: "Error creando" });
   }
 });
 
-// 5. CONEXIÓN A MONGO + LEVANTAR SERVIDOR
-async function start() {
-  try {
-    console.log("⏳ Conectando a Mongo Atlas…");
-    await client.connect();
-    console.log("✅ Conectado a Mongo Atlas");
+// UPDATE
+app.put("/characters/:id", async (req, res) => {
+  const _id = toId(req.params.id);
+  if (!_id) return res.status(400).json({ error: "ID inválido" });
 
+  const allowed = ["name","displayName","imageUrl","age","height_cm","weight_kg","nen_type","role"];
+  const payload = Object.fromEntries(Object.entries(req.body || {}).filter(([k,v]) => allowed.includes(k) && v !== undefined));
+  if (!Object.keys(payload).length) return res.status(400).json({ error: "Nada para actualizar" });
+
+  try {
+    const r = await col().findOneAndUpdate({ _id }, { $set: payload }, { returnDocument: "after" });
+    if (!r.value) return res.status(404).json({ error: "No encontrado" });
+    res.json(r.value);
+  } catch (e) {
+    console.error(e); res.status(500).json({ error: "Error actualizando" });
+  }
+});
+
+// DELETE
+app.delete("/characters/:id", async (req, res) => {
+  const _id = toId(req.params.id);
+  if (!_id) return res.status(400).json({ error: "ID inválido" });
+
+  try {
+    const r = await col().deleteOne({ _id });
+    if (!r.deletedCount) return res.status(404).json({ error: "No encontrado" });
+    res.status(204).send();
+  } catch (e) {
+    console.error(e); res.status(500).json({ error: "Error eliminando" });
+  }
+});
+
+// ===== START =====
+async function start() {
+  try { console.log("⏳ Conectando a Mongo…"); await client.connect(); console.log("✅ Mongo listo"); }
+  catch (e) { console.error("❌ No conectó Mongo:", e?.message); }
+  finally {
     app.listen(PORT, () => {
-      console.log(`API Mongo escuchando en http://localhost:${PORT}`);
-      console.log(`Swagger Mongo en http://localhost:${PORT}/api-docs`);
-    });
-  } catch (err) {
-    console.error("❌ No se pudo conectar a Mongo Atlas:", err.message);
-    // aun así levantamos la API para que Render no la marque como caída
-    app.listen(PORT, () => {
-      console.log(
-        `API Mongo levantada SIN conexión a Mongo, en http://localhost:${PORT}`
-      );
+      console.log(`API Mongo en http://localhost:${PORT}`);
+      console.log("Swagger:", `http://localhost:${PORT}/api-docs`);
     });
   }
 }
-
 start();
