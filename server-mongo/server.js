@@ -151,26 +151,46 @@ app.post("/characters", async (req, res) => {
   }
 });
 
-// UPDATE
+// UPDATE (versión robusta: updateOne + findOne)
 app.put("/characters/:id", async (req, res) => {
   const _id = toId(req.params.id);
   if (!_id) return res.status(400).json({ error: "ID inválido" });
 
-  const allowed = ["name", "displayName", "imageUrl", "age", "height_cm", "weight_kg", "nen_type", "role"];
+  const allowed = [
+    "name",
+    "displayName",
+    "imageUrl",
+    "age",
+    "height_cm",
+    "weight_kg",
+    "nen_type",
+    "role",
+  ];
+
   const payload = Object.fromEntries(
     Object.entries(req.body || {}).filter(([k, v]) => allowed.includes(k) && v !== undefined)
   );
-  if (!Object.keys(payload).length) return res.status(400).json({ error: "Nada para actualizar" });
+
+  if (!Object.keys(payload).length) {
+    return res.status(400).json({ error: "Nada para actualizar" });
+  }
 
   try {
-    const r = await col().findOneAndUpdate({ _id }, { $set: payload }, { returnDocument: "after" });
-    if (!r.value) return res.status(404).json({ error: "No encontrado" });
-    res.json(r.value);
+    const upd = await col().updateOne({ _id }, { $set: payload });
+
+    if (upd.matchedCount === 0) {
+      return res.status(404).json({ error: "No encontrado" });
+    }
+
+    // Leer y devolver el documento actualizado
+    const updated = await col().findOne({ _id });
+    return res.status(200).json(updated);
   } catch (e) {
     console.error("PUT /characters/:id error:", e);
-    res.status(500).json({ error: "Error actualizando" });
+    return res.status(500).json({ error: "Error actualizando" });
   }
 });
+
 
 // DELETE
 app.delete("/characters/:id", async (req, res) => {
