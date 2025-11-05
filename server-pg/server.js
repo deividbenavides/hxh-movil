@@ -110,25 +110,56 @@ app.post("/characters", async (req, res) => {
   }
 });
 
-// UPDATE
+// UPDATE (PG)
+// PUT /characters/:id
 app.put("/characters/:id", async (req, res) => {
   const id = Number(req.params.id);
-  if (!Number.isInteger(id)) return res.status(400).json({ error: "ID inválido" });
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).send("id inválido");
+  }
 
-  const upd = buildUpdate(req.body || {});
-  if (!upd) return res.status(400).json({ error: "Nada para actualizar" });
+  // Campos permitidos en PG (snake_case)
+  const allowed = [
+    "name",
+    "display_name",
+    "image_url",
+    "age",
+    "height_cm",
+    "weight_kg",
+    "nen_type",
+    "role",
+  ];
+
+  // Filtra solo los que vienen en el body y no son undefined/null
+  const entries = Object.entries(req.body || {}).filter(
+    ([k, v]) => allowed.includes(k) && v !== undefined
+  );
+
+  if (entries.length === 0) {
+    return res.status(400).send("Nada para actualizar");
+  }
+
+  // Construye SET dinámico: campo=$1, campo2=$2, ...
+  const setClauses = [];
+  const values = [];
+  entries.forEach(([key, value], i) => {
+    setClauses.push(`${key}=$${i + 1}`);
+    values.push(value);
+  });
+
+  // El id SIEMPRE va al final (siguiente índice)
+  values.push(id);
+  const idPlaceholder = `$${values.length}`;
+
+  const sql = `UPDATE characters SET ${setClauses.join(", ")} WHERE id=${idPlaceholder} RETURNING *;`;
 
   try {
-    const { rows } = await pool.query(
-      `UPDATE characters SET ${upd.sets} WHERE id = $${upd.values.length + 1}
-       RETURNING id, name, displayname, imageurl, age, height_cm, weight_kg, nen_type, role`,
-      [...upd.values, id]
-    );
-    if (!rows.length) return res.status(404).json({ error: "No encontrado" });
-    res.json(rows[0]);
+    const { rows } = await pool.query(sql, values);
+    if (rows.length === 0) return res.status(404).send("No encontrado");
+    return res.json(rows[0]);
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "Error actualizando" });
+    console.error("PG UPDATE error:", e.message, e.stack);
+    return res.status(500).send("Error del servidor");
   }
 });
 
