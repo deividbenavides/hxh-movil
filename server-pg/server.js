@@ -5,41 +5,44 @@ import pkg from "pg";
 import swaggerUi from "swagger-ui-express";
 const { Pool } = pkg;
 
-/* =========================
- * 1) ENV & DB
- * ========================= */
+/* ========== 1) ENV ========== */
 const PORT = process.env.PORT || 5001;
 
-// Usa la DB de Render si existe, si no, tu local
-const DATABASE_URL =
-  process.env.DATABASE_URL ||
-  "postgresql://postgres:postgres@localhost:5432/hxh";
+// En Render, usa sí o sí la DATABASE_URL del servicio.
+// En local, si no está definida, cae a tu postgres local.
+const LOCAL_FALLBACK = "postgresql://postgres:postgres@localhost:5432/hxh";
+const IS_RENDER = !!process.env.RENDER;
+const DATABASE_URL = process.env.DATABASE_URL || (!IS_RENDER ? LOCAL_FALLBACK : null);
+
+if (!DATABASE_URL) {
+  console.error("❌ DATABASE_URL no está definida en el servicio de Render.");
+  process.exit(1);
+}
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
-  // En Render debes tener PGSSL=true en Variables de entorno
-  ssl: process.env.PGSSL === "true" ? { rejectUnauthorized: false } : false,
+  ssl: IS_RENDER ? { rejectUnauthorized: false } : false,
 });
 
-/* =========================
- * 2) APP & MIDDLEWARES
- * ========================= */
+// Log NO sensible (solo host y db) para validar a dónde conecta
+try {
+  const u = new URL(DATABASE_URL);
+  console.log("🔌 DB host:", u.hostname, "DB name:", u.pathname.replace("/", ""));
+} catch {}
+
+/* ========== 2) APP & SWAGGER ========== */
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* =========================
- * 3) SWAGGER (mismo spec)
- * ========================= */
-// NOTA: server URL como "/" para que funcione tanto local como en Render.
+// Usamos "/" para que Swagger funcione igual en local y Render
 const swaggerDoc = {
   openapi: "3.0.0",
   info: { title: "HXH API - PostgreSQL", version: "1.0.0" },
   servers: [{ url: "/" }],
   paths: {
-    "/health": {
-      get: { summary: "Health", responses: { 200: { description: "OK" } } },
-    },
+    "/health": { get: { summary: "Health", responses: { 200: { description: "OK" } } } },
+    "/diag": { get: { summary: "Diag (host/db)", responses: { 200: { description: "OK" } } } },
     "/characters": {
       get: { summary: "Lista personajes", responses: { 200: { description: "OK" } } },
       post: {
@@ -50,10 +53,8 @@ const swaggerDoc = {
             "application/json": {
               schema: {
                 type: "object",
-                // En la tabla image_url es NOT NULL, por eso es requerido
-                required: ["name", "image_url"],
+                required: ["name", "image_url"], // image_url es NOT NULL en tu tabla
                 properties: {
-                  // Aceptamos snake_case en el spec, pero la API tolera camelCase también
                   name: { type: "string" },
                   display_name: { type: "string" },
                   image_url: { type: "string" },
@@ -65,18 +66,30 @@ const swaggerDoc = {
                   description: { type: "string" },
                 },
               },
+              examples: {
+                ejemplo: {
+                  value: {
+                    name: "Gon",
+                    display_name: "Gon Freecss",
+                    image_url: "https://example.com/gon.png",
+                    age: 12,
+                    height_cm: 154,
+                    weight_kg: 49,
+                    nen_type: "Refuerzo",
+                    role: "Hunter",
+                    description: "Prota de HxH",
+                  },
+                },
+              },
             },
           },
         },
-        responses: {
-          201: { description: "Creado" },
-          400: { description: "Faltan datos" },
-        },
+        responses: { 201: { description: "Creado" }, 400: { description: "Faltan datos" } },
       },
     },
     "/characters/{id}": {
       put: {
-        summary: "Actualiza por ID (parcial)",
+        summary: "Actualiza por ID (parcial, snake_case)",
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
         requestBody: {
           required: true,
@@ -97,6 +110,9 @@ const swaggerDoc = {
                   description: { type: "string" },
                 },
               },
+              examples: {
+                ejemplo: { value: { display_name: "Gon Freecss (Editado)" } },
+              },
             },
           },
         },
@@ -112,12 +128,16 @@ const swaggerDoc = {
 };
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDoc));
 
-/* =========================
- * 4) ENDPOINTS
- * ========================= */
-
-// Health
+/* ========== 3) ENDPOINTS ========== */
 app.get("/health", (_req, res) => res.json({ status: "ok", service: "pg" }));
+app.get("/diag", (_req, res) => {
+  try {
+    const u = new URL(DATABASE_URL);
+    res.json({ host: u.hostname, db: u.pathname.replace("/", ""), ssl: !!(IS_RENDER) });
+  } catch {
+    res.json({ host: "unknown" });
+  }
+});
 
 // LIST
 app.get("/characters", async (_req, res) => {
@@ -134,21 +154,21 @@ app.get("/characters", async (_req, res) => {
   }
 });
 
-// CREATE (acepta snake_case y camelCase en el body)
+// CREATE
 app.post("/characters", async (req, res) => {
-  const b = req.body || {};
-  // Normalizamos: si viene camelCase lo mapeamos
-  const name        = b.name;
-  const displayName = b.display_name ?? b.displayName ?? null;
-  const imageUrl    = b.image_url   ?? b.imageUrl;
-  const age         = b.age ?? null;
-  const height_cm   = b.height_cm ?? b.heightCm ?? null;
-  const weight_kg   = b.weight_kg ?? b.weightKg ?? null;
-  const nen_type    = b.nen_type ?? b.nenType ?? null;
-  const role        = b.role ?? null;
-  const description = b.description ?? null;
+  const {
+    name,
+    display_name = null,
+    image_url,
+    age = null,
+    height_cm = null,
+    weight_kg = null,
+    nen_type = null,
+    role = null,
+    description = null,
+  } = req.body || {};
 
-  if (!name || !imageUrl) {
+  if (!name || !image_url) {
     return res.status(400).json({ error: "name e image_url son obligatorios" });
   }
 
@@ -158,7 +178,7 @@ app.post("/characters", async (req, res) => {
        (name, display_name, image_url, age, height_cm, weight_kg, nen_type, role, description)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        RETURNING id, name, display_name, image_url, age, height_cm, weight_kg, nen_type, role, description`,
-      [name, displayName, imageUrl, age, height_cm, weight_kg, nen_type, role, description]
+      [name, display_name, image_url, age, height_cm, weight_kg, nen_type, role, description]
     );
     res.status(201).json(rows[0]);
   } catch (e) {
@@ -167,45 +187,41 @@ app.post("/characters", async (req, res) => {
   }
 });
 
-// UPDATE (solo este bloque es “nuevo”; soporta snake_case y camelCase)
+// UPDATE (dinámico, snake_case)
 app.put("/characters/:id", async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) return res.status(400).send("id inválido");
 
-  const b = req.body || {};
-  const normalized = {
-    name:         b.name ?? b.Name,
-    display_name: b.display_name ?? b.displayName,
-    image_url:    b.image_url ?? b.imageUrl,
-    age:          b.age,
-    height_cm:    b.height_cm ?? b.heightCm,
-    weight_kg:    b.weight_kg ?? b.weightKg,
-    nen_type:     b.nen_type ?? b.nenType,
-    role:         b.role,
-    description:  b.description,
-  };
-
   const allowed = [
-    "name", "display_name", "image_url", "age",
-    "height_cm", "weight_kg", "nen_type", "role", "description",
+    "name",
+    "display_name",
+    "image_url",
+    "age",
+    "height_cm",
+    "weight_kg",
+    "nen_type",
+    "role",
+    "description",
   ];
 
-  const entries = Object.entries(normalized).filter(([k, v]) => allowed.includes(k) && v !== undefined);
-  if (entries.length === 0) return res.status(400).send("Nada para actualizar");
+  const entries = Object.entries(req.body || {}).filter(
+    ([k, v]) => allowed.includes(k) && v !== undefined
+  );
+  if (!entries.length) return res.status(400).send("Nada para actualizar");
 
   const set = entries.map(([k], i) => `${k}=$${i + 1}`).join(", ");
   const values = entries.map(([, v]) => v);
   values.push(id);
 
-  const sql = `UPDATE public.characters SET ${set} WHERE id=$${values.length} RETURNING *;`;
+  const sql = `UPDATE public.characters SET ${set} WHERE id=$${values.length} RETURNING *`;
 
   try {
     const { rows } = await pool.query(sql, values);
-    if (rows.length === 0) return res.status(404).send("No encontrado");
-    return res.json(rows[0]);
+    if (!rows.length) return res.status(404).send("No encontrado");
+    res.json(rows[0]);
   } catch (e) {
     console.error("PG UPDATE error:", e);
-    return res.status(500).send("Error del servidor");
+    res.status(500).send("Error del servidor");
   }
 });
 
@@ -215,10 +231,7 @@ app.delete("/characters/:id", async (req, res) => {
   if (!Number.isInteger(id)) return res.status(400).json({ error: "ID inválido" });
 
   try {
-    const { rowCount } = await pool.query(
-      `DELETE FROM public.characters WHERE id = $1`,
-      [id]
-    );
+    const { rowCount } = await pool.query(`DELETE FROM public.characters WHERE id=$1`, [id]);
     if (!rowCount) return res.status(404).json({ error: "No encontrado" });
     res.status(204).send();
   } catch (e) {
@@ -227,9 +240,7 @@ app.delete("/characters/:id", async (req, res) => {
   }
 });
 
-/* =========================
- * 5) START
- * ========================= */
+/* ========== 4) START ========== */
 app.listen(PORT, () => {
   console.log(`API PG en http://localhost:${PORT}`);
   console.log("Swagger: /api-docs");
