@@ -3,10 +3,15 @@ import express from "express";
 import cors from "cors";
 import pkg from "pg";
 import swaggerUi from "swagger-ui-express";
+
 const { Pool } = pkg;
 
-// ===== 1) ENV =====
+/* =========================
+   1) ENV & DB POOL
+   ========================= */
 const PORT = process.env.PORT || 5001;
+
+// En Render debes definir: DATABASE_URL (External DB URL) y PGSSL=true
 const DATABASE_URL =
   process.env.DATABASE_URL ||
   "postgresql://postgres:postgres@localhost:5432/hxh";
@@ -20,16 +25,23 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ===== 2) SWAGGER =====
-// Importante: url "/" para que funcione igual en local y en Render
+/* =========================
+   2) SWAGGER (OpenAPI 3)
+   ========================= */
+// Usar "/" como server para que funcione tanto local como en Render
 const swaggerDoc = {
   openapi: "3.0.0",
   info: { title: "HXH API - PostgreSQL", version: "1.0.0" },
   servers: [{ url: "/" }],
   paths: {
-    "/health": { get: { summary: "Health", responses: { 200: { description: "OK" } } } },
+    "/health": {
+      get: { summary: "Health", responses: { 200: { description: "OK" } } },
+    },
     "/characters": {
-      get: { summary: "Lista personajes", responses: { 200: { description: "OK" } } },
+      get: {
+        summary: "Lista personajes",
+        responses: { 200: { description: "OK" } },
+      },
       post: {
         summary: "Crea un personaje",
         requestBody: {
@@ -38,7 +50,7 @@ const swaggerDoc = {
             "application/json": {
               schema: {
                 type: "object",
-                required: ["name", "image_url"], // image_url es NOT NULL en tu tabla
+                required: ["name", "image_url"], // image_url es NOT NULL
                 properties: {
                   name: { type: "string" },
                   display_name: { type: "string" },
@@ -63,7 +75,9 @@ const swaggerDoc = {
     "/characters/{id}": {
       put: {
         summary: "Actualiza por ID (parcial)",
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "integer" } },
+        ],
         requestBody: {
           required: true,
           content: {
@@ -86,19 +100,29 @@ const swaggerDoc = {
             },
           },
         },
-        responses: { 200: { description: "Actualizado" }, 404: { description: "No encontrado" } },
+        responses: {
+          200: { description: "Actualizado" },
+          400: { description: "Nada para actualizar / id inválido" },
+          404: { description: "No encontrado" },
+        },
       },
       delete: {
         summary: "Elimina por ID",
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "integer" } },
+        ],
         responses: { 204: { description: "Eliminado" }, 404: { description: "No encontrado" } },
       },
     },
   },
 };
+
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDoc));
 
-// ===== 3) ENDPOINTS =====
+/* =========================
+   3) ENDPOINTS
+   ========================= */
+
 app.get("/health", (_req, res) => res.json({ status: "ok", service: "pg" }));
 
 // LIST
@@ -149,7 +173,7 @@ app.post("/characters", async (req, res) => {
   }
 });
 
-// UPDATE parcial
+// UPDATE (parcial)
 app.put("/characters/:id", async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) return res.status(400).send("id inválido");
@@ -205,7 +229,9 @@ app.delete("/characters/:id", async (req, res) => {
   }
 });
 
-// ===== 4) START =====
+/* =========================
+   4) START
+   ========================= */
 app.listen(PORT, () => {
   console.log(`API PG en http://localhost:${PORT}`);
   console.log("Swagger: /api-docs");
